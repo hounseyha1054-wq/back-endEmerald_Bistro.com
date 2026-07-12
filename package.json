@@ -4,14 +4,14 @@
   "main": "api/index.js",
   "type": "module",
   "scripts": {
-     
     "start": "node api/index.js",
-  "server": "nodemon api/index.js"
+    "server": "nodemon api/index.js"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
