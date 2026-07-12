@@ -1,5 +1,6 @@
 import express from "express";
-import { Adminlogin } from "../controller/UserController.js";
+
+import { Adminlogin } from '../controller/UserController.js';
 import upload from "../middleware/multer.js";
 import adminAuth from "../middleware/adminAuth.js";
 import {
