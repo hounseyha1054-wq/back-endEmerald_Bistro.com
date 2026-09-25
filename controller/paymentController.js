@@ -6,10 +6,21 @@ import Order from "../model/orderModel.js";
 const sandboxBaseUrl = "https://checkout-sandbox.payway.com.kh";
 const productionBaseUrl = "https://checkout.payway.com.kh";
 
-const payWayConfig = () => {
+const getFrontendUrl = (req = {}) => {
+  const origin = req.headers?.origin || req.headers?.referer || "";
+  const frontendUrl =
+    process.env.FRONTEND_URL ||
+    process.env.CLIENT_URL ||
+    process.env.VITE_FRONTEND_URL ||
+    (origin ? new URL(origin).origin : "") ||
+    "http://localhost:5173";
+
+  return String(frontendUrl).replace(/\/$/, "");
+};
+
+const payWayConfig = (req = {}) => {
   const merchantId = process.env.PAYWAY_MERCHANT_ID;
   const apiKey = process.env.PAYWAY_API_KEY;
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
   const callbackUrl = process.env.PAYWAY_RETURN_URL;
 
   if (!merchantId || !apiKey || !callbackUrl) {
@@ -22,7 +33,7 @@ const payWayConfig = () => {
   return {
     merchantId,
     apiKey,
-    frontendUrl: frontendUrl.replace(/\/$/, ""),
+    frontendUrl: getFrontendUrl(req),
     callbackUrl,
     baseUrl: useSandbox ? sandboxBaseUrl : productionBaseUrl,
   };
@@ -37,7 +48,8 @@ const requestTime = () => {
 const sign = (value, apiKey) =>
   crypto.createHmac("sha512", apiKey).update(value).digest("base64");
 
-const encodeJson = (value) => Buffer.from(JSON.stringify(value)).toString("base64");
+const encodeJson = (value) =>
+  Buffer.from(JSON.stringify(value)).toString("base64");
 
 const paymentHash = (fields, apiKey) =>
   sign(
@@ -144,15 +156,13 @@ const applyPaymentResult = async (transactionId, result) => {
 const createPayment = async (req, res) => {
   try {
     if (!validCart(req.body.items)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Your cart contains an invalid item or quantity.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Your cart contains an invalid item or quantity.",
+      });
     }
 
-    const config = payWayConfig();
+    const config = payWayConfig(req);
     const requestedItems = req.body.items;
     const products = await Product.find({
       _id: { $in: requestedItems.map((item) => item.productId) },
@@ -162,12 +172,10 @@ const createPayment = async (req, res) => {
     );
 
     if (productsById.size !== requestedItems.length) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "One or more menu items are no longer available.",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "One or more menu items are no longer available.",
+      });
     }
 
     const orderItems = requestedItems.map(({ productId, quantity }) => {
@@ -261,7 +269,7 @@ const createPayment = async (req, res) => {
 
 const paymentCallback = async (req, res) => {
   try {
-    const config = payWayConfig();
+    const config = payWayConfig(req);
     const receivedSignature = req.get("x-payway-hmac-sha512") || "";
     const payload = req.body || {};
     const message = Object.keys(payload)
@@ -313,7 +321,7 @@ const paymentStatus = async (req, res) => {
     if (order.status === "pending") {
       const transaction = await getPayWayTransaction(
         transactionId,
-        payWayConfig(),
+        payWayConfig(req),
       );
       await applyPaymentResult(transactionId, transaction);
     }
