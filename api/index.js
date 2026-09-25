@@ -6,6 +6,7 @@ import CloudinaryConfig from '../config/cloundinary.js'
 import UserRouter from '../route/userRouter.js'
 import ProductRouter from '../route/productRouter.js'
 import reservationRouter from '../route/reservationRouter.js'
+import paymentRouter from '../route/paymentRouter.js'
  
 const app = express()
 const port = process.env.PORT||4000
@@ -30,6 +31,7 @@ app.get('/',(req,res)=>{
 app.use('/api/user',UserRouter)
 app.use('/api/product',ProductRouter)
 app.use('/api/reservation',reservationRouter)
+app.use('/api/payment', paymentRouter)
 
 app.listen(port,()=>{
     console.log(`server is runing port http://localhost:${port}`);

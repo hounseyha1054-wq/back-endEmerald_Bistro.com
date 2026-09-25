@@ -1,5 +1,5 @@
 import express from "express";
-import {
+import{
   Adminlogin,
   registerUser,
   loginUser,
