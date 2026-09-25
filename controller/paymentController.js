@@ -37,6 +37,8 @@ const requestTime = () => {
 const sign = (value, apiKey) =>
   crypto.createHmac("sha512", apiKey).update(value).digest("base64");
 
+const encodeJson = (value) => Buffer.from(JSON.stringify(value)).toString("base64");
+
 const paymentHash = (fields, apiKey) =>
   sign(
     [
@@ -211,7 +213,7 @@ const createPayment = async (req, res) => {
       merchant_id: config.merchantId,
       tran_id: transactionId,
       amount: amount.toFixed(2),
-      items: JSON.stringify(
+      items: encodeJson(
         orderItems.map((item) => ({
           name: item.name,
           quantity: item.quantity,
@@ -232,7 +234,7 @@ const createPayment = async (req, res) => {
       return_deeplink: "",
       currency: "USD",
       custom_fields: "",
-      return_params: JSON.stringify({ order_id: String(order._id) }),
+      return_params: encodeJson({ order_id: String(order._id) }),
       view_type: "hosted",
     };
     fields.hash = paymentHash(fields, config.apiKey);
