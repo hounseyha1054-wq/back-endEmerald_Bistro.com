@@ -344,4 +344,176 @@ const paymentStatus = async (req, res) => {
   }
 };
 
-export { createPayment, paymentCallback, paymentStatus };
+const createPaymentQr = async (req, res) => {
+  try {
+    if (!validCart(req.body.items)) {
+      return res.status(400).json({
+        success: false,
+        message: "Your cart contains an invalid item or quantity.",
+      });
+    }
+
+    const config = payWayConfig(req);
+    const requestedItems = req.body.items;
+    const products = await Product.find({
+      _id: { $in: requestedItems.map((item) => item.productId) },
+    }).lean();
+    const productsById = new Map(
+      products.map((product) => [String(product._id), product]),
+    );
+
+    if (productsById.size !== requestedItems.length) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more menu items are no longer available.",
+      });
+    }
+
+    const orderItems = requestedItems.map(({ productId, quantity }) => {
+      const product = productsById.get(productId);
+      return {
+        product: product._id,
+        name: product.name,
+        unitPrice: Number(product.price),
+        quantity,
+      };
+    });
+    const amount = Number(
+      orderItems
+        .reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+        .toFixed(2),
+    );
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "The order total is invalid." });
+    }
+
+    const transactionId = newTransactionId();
+    const customer = req.body.customer || {};
+    const order = await Order.create({
+      transactionId,
+      customer: {
+        id: String(customer.id || ""),
+        name: String(customer.name || ""),
+        email: String(customer.email || ""),
+      },
+      items: orderItems,
+      amount,
+      currency: "USD",
+    });
+
+    const { firstname, lastname } = splitName(customer.name);
+    const successUrl = `${config.frontendUrl}/payment/success?tran_id=${encodeURIComponent(transactionId)}`;
+    const cancelUrl = `${config.frontendUrl}/payment/cancel?tran_id=${encodeURIComponent(transactionId)}`;
+
+    const encodedItems = encodeJson(
+      orderItems.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        price: item.unitPrice.toFixed(2),
+      })),
+    );
+    const encodedReturnParams = encodeJson({ order_id: String(order._id) });
+    const reqTime = requestTime();
+
+    // Hash covers exactly these 24 fields in this order per ABA PayWay §8.2
+    const hashInput = [
+      reqTime,
+      config.merchantId,
+      transactionId,
+      amount.toFixed(2),
+      encodedItems,
+      "0",           // shipping
+      firstname,
+      lastname,
+      String(customer.email || ""),
+      "",            // phone
+      "purchase",    // type
+      "abapay_khqr", // payment_option
+      config.callbackUrl,
+      cancelUrl,
+      successUrl,    // continue_success_url
+      "",            // return_deeplink
+      "USD",         // currency
+      "",            // custom_fields
+      encodedReturnParams,
+      "",            // payout
+      "10",          // lifetime
+      "",            // additional_params
+      "",            // google_pay_token
+      "1",           // skip_success_page
+    ].join("");
+    const hash = sign(hashInput, config.apiKey);
+
+    const formBody = new URLSearchParams({
+      req_time: reqTime,
+      merchant_id: config.merchantId,
+      tran_id: transactionId,
+      amount: amount.toFixed(2),
+      items: encodedItems,
+      shipping: "0",
+      firstname,
+      lastname,
+      email: String(customer.email || ""),
+      phone: "",
+      type: "purchase",
+      payment_option: "abapay_khqr",
+      return_url: config.callbackUrl,
+      cancel_url: cancelUrl,
+      continue_success_url: successUrl,
+      return_deeplink: "",
+      currency: "USD",
+      custom_fields: "",
+      return_params: encodedReturnParams,
+      payout: "",
+      lifetime: "10",
+      additional_params: "",
+      google_pay_token: "",
+      skip_success_page: "1",
+      hash,
+    });
+
+    const abaResponse = await fetch(
+      `${config.baseUrl}/api/payment-gateway/v1/payments/purchase`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formBody.toString(),
+      },
+    );
+
+    if (!abaResponse.ok) {
+      throw new Error(`ABA PayWay responded with HTTP ${abaResponse.status}`);
+    }
+
+    const abaData = await abaResponse.json();
+
+    if (String(abaData?.status?.code) !== "0") {
+      throw new Error(
+        `ABA PayWay rejected QR request: ${abaData?.status?.message || "Unknown error"}`,
+      );
+    }
+
+    return res.status(201).json({
+      success: true,
+      qrImage: abaData.qrImage || null,
+      qrString: abaData.qr_string || null,
+      transactionId,
+      amount,
+    });
+  } catch (error) {
+    console.error("Unable to create PayWay QR payment:", error.message);
+    return res
+      .status(error.message.includes("not configured") ? 503 : 500)
+      .json({
+        success: false,
+        message: error.message.includes("not configured")
+          ? error.message
+          : "Unable to generate QR code. Please try again.",
+      });
+  }
+};
+
+export { createPayment, paymentCallback, paymentStatus, createPaymentQr };
