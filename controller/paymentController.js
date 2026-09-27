@@ -405,8 +405,6 @@ const createPaymentQr = async (req, res) => {
     });
 
     const { firstname, lastname } = splitName(customer.name);
-    const successUrl = `${config.frontendUrl}/payment/success?tran_id=${encodeURIComponent(transactionId)}`;
-    const cancelUrl = `${config.frontendUrl}/payment/cancel?tran_id=${encodeURIComponent(transactionId)}`;
 
     const encodedItems = encodeJson(
       orderItems.map((item) => ({
@@ -416,90 +414,82 @@ const createPaymentQr = async (req, res) => {
       })),
     );
     const encodedReturnParams = encodeJson({ order_id: String(order._id) });
+    const encodedCallbackUrl = Buffer.from(config.callbackUrl).toString("base64");
     const reqTime = requestTime();
+    const email = String(customer.email || "");
 
-    // Hash covers exactly these 24 fields in this order per ABA PayWay §8.2
+    // Hash: 19 fields in exact order per ABA PayWay /generate-qr spec
     const hashInput = [
-      reqTime,
-      config.merchantId,
-      transactionId,
-      amount.toFixed(2),
-      encodedItems,
-      "0",           // shipping
-      firstname,
-      lastname,
-      String(customer.email || ""),
-      "",            // phone
-      "purchase",    // type
-      "abapay_khqr", // payment_option
-      config.callbackUrl,
-      cancelUrl,
-      successUrl,    // continue_success_url
-      "",            // return_deeplink
-      "USD",         // currency
-      "",            // custom_fields
-      encodedReturnParams,
-      "",            // payout
-      "10",          // lifetime
-      "",            // additional_params
-      "",            // google_pay_token
-      "1",           // skip_success_page
+      reqTime,           // req_time
+      config.merchantId, // merchant_id
+      transactionId,     // tran_id
+      amount.toFixed(2), // amount
+      encodedItems,      // items
+      firstname,         // first_name
+      lastname,          // last_name
+      email,             // email
+      "",                // phone (empty — omitted from body but included in hash)
+      "purchase",        // purchase_type
+      "abapay_khqr",     // payment_option
+      encodedCallbackUrl,// callback_url
+      "",                // return_deeplink (empty)
+      "USD",             // currency
+      "",                // custom_fields (empty)
+      encodedReturnParams, // return_params
+      "",                // payout (empty)
+      "10",              // lifetime
+      "template3_color", // qr_image_template
     ].join("");
     const hash = sign(hashInput, config.apiKey);
 
-    const formBody = new URLSearchParams({
+    // Build JSON body — omit fields that are empty strings
+    const requestBody = {
       req_time: reqTime,
       merchant_id: config.merchantId,
       tran_id: transactionId,
       amount: amount.toFixed(2),
       items: encodedItems,
-      shipping: "0",
-      firstname,
-      lastname,
-      email: String(customer.email || ""),
-      phone: "",
-      type: "purchase",
+      first_name: firstname,
+      last_name: lastname,
+      purchase_type: "purchase",
       payment_option: "abapay_khqr",
-      return_url: config.callbackUrl,
-      cancel_url: cancelUrl,
-      continue_success_url: successUrl,
-      return_deeplink: "",
+      callback_url: encodedCallbackUrl,
       currency: "USD",
-      custom_fields: "",
       return_params: encodedReturnParams,
-      payout: "",
       lifetime: "10",
-      additional_params: "",
-      google_pay_token: "",
-      skip_success_page: "1",
+      qr_image_template: "template3_color",
       hash,
-    });
+    };
+    if (email) requestBody.email = email;
 
     const abaResponse = await fetch(
-      `${config.baseUrl}/api/payment-gateway/v1/payments/purchase`,
+      config.baseUrl + "/api/payment-gateway/v1/payments/generate-qr",
       {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formBody.toString(),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       },
     );
 
-    if (!abaResponse.ok) {
-      throw new Error(`ABA PayWay responded with HTTP ${abaResponse.status}`);
-    }
+    const abaRawText = await abaResponse.text();
+    console.log("ABA PayWay /generate-qr response [" + abaResponse.status + "]:", abaRawText);
+    let abaData;
+    try { abaData = JSON.parse(abaRawText); } catch (e) { abaData = null; }
 
-    const abaData = await abaResponse.json();
+    if (!abaResponse.ok) {
+      throw new Error("ABA PayWay responded with HTTP " + abaResponse.status + ": " + abaRawText);
+    }
 
     if (String(abaData?.status?.code) !== "0") {
       throw new Error(
-        `ABA PayWay rejected QR request: ${abaData?.status?.message || "Unknown error"}`,
+        "ABA PayWay rejected QR request (code " + abaData?.status?.code + "): " + (abaData?.status?.message || "Unknown error"),
       );
     }
 
     return res.status(201).json({
       success: true,
       qrImage: abaData.qrImage || null,
-      qrString: abaData.qr_string || null,
+      qrString: abaData.qrString || null,
       transactionId,
       amount,
     });
